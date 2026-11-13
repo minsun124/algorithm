@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Night Navi: Dijkstra vs A*</title>
+<style>
+  :root {
+    --bg: #0a0c10;
+    --road: #1c2027;
+    --road-line: #252a33;
+    --building: #0d0f13;
+    --text: #e8ecf2;
+    --muted: #8a93a3;
+    --glass: rgba(22, 26, 33, .78);
+    --stroke: rgba(255, 255, 255, .08);
+    --blue: #22b8ff;          /* 네온 블루: Dijkstra */
+    --orange: #ff8a1f;        /* 네온 오렌지: A* */
+    --green: #39ff88;         /* 형광 그린: 최단 경로 */
+    --start: #2f8cff;
+    --goal: #ff3b55;
+    --cell: min(4.3vw, 30px);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    min-height: 100vh; padding: 16px;
+    font-family: 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #16202e 0%, var(--bg) 60%);
+  }
+  .app { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+  /* ───── 상단 플로팅 컨트롤 패널 */
+  .bar {
+    position: sticky; top: 12px; z-index: 10;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 14px; border-radius: 18px; background: var(--glass);
+    border: 1px solid var(--stroke); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  }
+  .brand { display: flex; flex-direction: column; gap: 2px; }
+  .brand b { font-size: 15px; letter-spacing: .02em; }
+  .brand span { font-size: 12px; color: var(--muted); }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    font: inherit; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-radius: 999px; border: 1px solid var(--stroke);
+    background: #1b2028; transition: background .15s, box-shadow .15s, transform .05s;
+  }
+  button:hover { background: #232a34; }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .b-dij .dot { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+  .b-ast .dot { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+  .b-dij:hover:not(:disabled) { box-shadow: 0 0 0 1px var(--blue) inset, 0 0 16px rgba(34, 184, 255, .25); }
+  .b-ast:hover:not(:disabled) { box-shadow: 0 0 0 1px var(--orange) inset, 0 0 16px rgba(255, 138, 31, .25); }
+
+  /* ───── 지도 */
+  .main { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; justify-content: center; }
+  .mapwrap {
+    padding: 12px; border-radius: 20px; background: #12151b; border: 1px solid var(--stroke);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, .55);
+  }
+  .map { position: relative; width: calc(var(--cell) * 20); height: calc(var(--cell) * 20); border-radius: 10px; overflow: hidden; }
+  #grid {
+    display: grid; grid-template-columns: repeat(20, var(--cell)); grid-template-rows: repeat(20, var(--cell));
+    user-select: none; touch-action: none; background: var(--road);
+  }
+  .cell { width: var(--cell); height: var(--cell); background: var(--road); box-shadow: inset 0 0 0 .5px var(--road-line); transition: background .25s; }
+  .cell.wall {
+    background: var(--building);
+    box-shadow: inset 0 0 0 .5px #000, inset 2px 2px 4px rgba(255, 255, 255, .03), 0 2px 6px rgba(0, 0, 0, .8);
+    position: relative; z-index: 1;
+  }
+  /* 후보(Open): 아주 옅은 테두리만 */
+  .cell.open-d { box-shadow: inset 0 0 0 1px rgba(34, 184, 255, .45); }
+  .cell.open-a { box-shadow: inset 0 0 0 1px rgba(255, 138, 31, .5); }
+  /* 확정(Closed): 레이더파처럼 밝게 켜졌다가 은은하게 남음 */
+  .cell.closed-d { background: rgba(34, 184, 255, .26); box-shadow: inset 0 0 6px rgba(80, 200, 255, .35); animation: pingBlue .7s ease-out; }
+  .cell.closed-a { background: rgba(255, 150, 40, .48); box-shadow: inset 0 0 6px rgba(255, 170, 70, .55); animation: pingOrange .7s ease-out; }
+  @keyframes pingBlue   { from { background: rgba(34, 184, 255, .85); box-shadow: 0 0 14px rgba(34, 184, 255, .9); } to { background: rgba(34, 184, 255, .26); box-shadow: inset 0 0 6px rgba(80, 200, 255, .35); } }
+  @keyframes pingOrange { from { background: rgba(255, 138, 31, .95); box-shadow: 0 0 14px rgba(255, 138, 31, .9); } to { background: rgba(255, 150, 40, .48); box-shadow: inset 0 0 6px rgba(255, 170, 70, .55); } }
+  .cell.current { box-shadow: inset 0 0 0 2px #fff; }
+  .cell.path { background: rgba(57, 255, 136, .12); }
+
+  /* 경로선·마커 레이어 (지도 위에 겹침, 클릭은 통과) */
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #route {
+    fill: none; stroke: var(--green); stroke-width: .3; stroke-linecap: round; stroke-linejoin: round;
+    filter: drop-shadow(0 0 .25px var(--green)) drop-shadow(0 0 .6px rgba(57, 255, 136, .8));
+    transition: stroke-dashoffset .6s ease-out;
+  }
+  .marker { position: absolute; pointer-events: none; z-index: 3; }
+  #start { width: calc(var(--cell) * 1.1); height: calc(var(--cell) * 1.1); transform: translate(-50%, -50%);
+           transition: left .11s linear, top .11s linear; }
+  #start .halo { position: absolute; inset: -40%; border-radius: 50%; background: rgba(47, 140, 255, .25); animation: halo 1.8s ease-out infinite; }
+  @keyframes halo { from { transform: scale(.4); opacity: .9; } to { transform: scale(1.2); opacity: 0; } }
+  #goal { width: calc(var(--cell) * 1.2); height: calc(var(--cell) * 1.5); transform: translate(-50%, -88%); }
+  /* 출발·도착 말풍선 라벨 (지도 앱 스타일) */
+  .tag { position: absolute; z-index: 4; pointer-events: none; padding: 3px 9px; border-radius: 999px;
+         font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; box-shadow: 0 4px 12px rgba(0, 0, 0, .5); }
+  .tag::after { content: ''; position: absolute; left: 50%; bottom: -4px; transform: translateX(-50%);
+                border: 4px solid transparent; border-bottom: 0; border-top-color: inherit; }
+  #tagStart { background: var(--start); border-top-color: var(--start); transform: translate(-50%, calc(-100% - var(--cell) * .75)); }
+  #tagGoal  { background: var(--goal);  border-top-color: var(--goal);  transform: translate(-50%, calc(-100% - var(--cell) * 1.45)); }
+
+  /* ───── 오른쪽 정보 카드 */
+  .side { flex: 1 1 280px; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
+  .card { padding: 14px 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--stroke); }
+  .card h3 { margin: 0 0 10px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .06em; }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { padding: 10px 12px; border-radius: 12px; background: #151920; border: 1px solid var(--stroke); }
+  .stat .name { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+  .stat.d .name { color: var(--blue); } .stat.a .name { color: var(--orange); }
+  .stat .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .stat .row b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+  .verdict { margin-top: 10px; font-size: 13px; line-height: 1.6; color: var(--text); min-height: 42px; }
+  .verdict b { color: var(--green); }
+  #now { font-size: 13px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+  #now .k { color: var(--muted); }
+  .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 12px; color: var(--muted); }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 10px 0 0; }
+  @media (max-width: 640px) { .btns { width: 100%; } .btns button { flex: 1 1 auto; justify-content: center; } .side { max-width: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <div class="brand"><b>Night Navi · Dijkstra vs A*</b><span>빈 도로를 클릭하거나 드래그해 건물을 세우고 지울 수 있습니다</span></div>
+    <div class="btns">
+      <button class="b-dij" id="btnDij"><span class="dot"></span>Dijkstra 탐색 (무방향 확산)</button>
+      <button class="b-ast" id="btnAst"><span class="dot"></span>A* 탐색 (목적지 지향)</button>
+      <button id="btnRst">초기화</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="mapwrap">
+      <div class="map" id="map">
+        <div id="grid"></div>
+        <svg id="overlay" viewBox="0 0 20 20" preserveAspectRatio="none"><polyline id="route" points=""/></svg>
+        <!-- 출발지: 파란 원형 마커 (현재 위치) -->
+        <div class="marker" id="start">
+          <div class="halo"></div>
+          <svg viewBox="0 0 24 24" width="100%" height="100%" style="position:relative">
+            <circle cx="12" cy="12" r="8" fill="#2f8cff" stroke="#fff" stroke-width="2.5"/>
+          </svg>
+        </div>
+        <div class="tag" id="tagStart">출발</div>
+        <div class="tag" id="tagGoal">도착</div>
+        <!-- 목적지: 빨간 핀 마커 -->
+        <div class="marker" id="goal">
+          <svg viewBox="0 0 24 30" width="100%" height="100%">
+            <path d="M12 29s-9-9.6-9-16a9 9 0 0 1 18 0c0 6.4-9 16-9 16z" fill="#ff3b55" stroke="#fff" stroke-width="1.6"/>
+            <circle cx="12" cy="12.5" r="3.4" fill="#fff"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h3>SCOREBOARD</h3>
+        <div class="vs">
+          <div class="stat d"><div class="name">Dijkstra</div>
+            <div class="row">확장한 칸 <b id="dExp">–</b></div><div class="row">경로 길이 <b id="dLen">–</b></div></div>
+          <div class="stat a"><div class="name">A*</div>
+            <div class="row">확장한 칸 <b id="aExp">–</b></div><div class="row">경로 길이 <b id="aLen">–</b></div></div>
+        </div>
+        <div class="verdict" id="verdict">같은 지도에서 두 버튼을 차례로 눌러 비교해 보세요.</div>
+      </div>
+      <div class="card"><h3>NOW</h3><div id="now"><span class="k">대기 중</span></div></div>
+      <div class="card">
+        <h3>LEGEND</h3>
+        <div class="legend">
+          <div><span class="sw" style="background:rgba(34,184,255,.6)"></span>Dijkstra 확정</div>
+          <div><span class="sw" style="background:rgba(255,138,31,.7)"></span>A* 확정</div>
+          <div><span class="sw" style="background:transparent;box-shadow:inset 0 0 0 1px rgba(34,184,255,.7)"></span>Dijkstra 후보</div>
+          <div><span class="sw" style="background:transparent;box-shadow:inset 0 0 0 1px rgba(255,138,31,.8)"></span>A* 후보</div>
+          <div><span class="sw" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span>최단 경로</div>
+          <div><span class="sw" style="background:var(--building);box-shadow:inset 0 0 0 1px #333"></span>건물</div>
+        </div>
+        <p class="note">이동: 상하좌우 4방향, 한 칸 비용 1<br>A* 휴리스틱: 맨해튼 거리 h = |Δx| + |Δy|</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+ * 0. 지도 설정
+ * ===================================================================== */
+const N = 20;                            // 20 x 20 격자
+const START = { r: 10, c: 3 };           // 출발지 (파란 마커)
+const GOAL  = { r: 10, c: 16 };          // 목적지 (빨간 핀)
+const STEP_DELAY = 15;                   // 탐색 애니메이션 간격 (ms)
+const MOVE_DELAY = 110;                  // 마커 주행 간격 (ms), CSS transition과 같은 값
+
+const gridEl = document.getElementById('grid');
+const startEl = document.getElementById('start');
+const goalEl = document.getElementById('goal');
+const routeEl = document.getElementById('route');
+const cells = [];                        // cells[r][c] = DOM 요소
+const wall = Array.from({ length: N }, () => Array(N).fill(false));
+let running = false;                     // 애니메이션 중에는 조작 막기
+let runId = 0;                           // 초기화 시 진행 중인 애니메이션 취소용
+const result = { dij: null, ast: null }; // 점수판 기록
+
+const key = (r, c) => r * N + c;         // (r, c) → 정점 번호
+const isStart = (r, c) => r === START.r && c === START.c;
+const isGoal  = (r, c) => r === GOAL.r && c === GOAL.c;
+
+for (let r = 0; r < N; r++) {
+  cells.push([]);
+  for (let c = 0; c < N; c++) {
+    const el = document.createElement('div');
+    el.className = 'cell'; el.dataset.r = r; el.dataset.c = c;
+    gridEl.appendChild(el); cells[r].push(el);
+  }
+}
+
+// 마커를 칸의 중심에 놓기 (퍼센트 좌표 → 화면 크기가 바뀌어도 그대로)
+function placeMarker(el, r, c) {
+  el.style.left = ((c + 0.5) / N * 100) + '%';
+  el.style.top  = ((r + 0.5) / N * 100) + '%';
+}
+placeMarker(startEl, START.r, START.c);
+placeMarker(goalEl, GOAL.r, GOAL.c);
+placeMarker(document.getElementById('tagStart'), START.r, START.c);  // 출발 라벨은 출발 칸에 고정
+placeMarker(document.getElementById('tagGoal'), GOAL.r, GOAL.c);
+
+/* =====================================================================
+ * 1. 장애물: 클릭 & 드래그로 건물 생성/삭제
+ * ===================================================================== */
+let painting = false, paintTo = true;
+function setWall(el, on) {
+  const r = +el.dataset.r, c = +el.dataset.c;
+  if (isStart(r, c) || isGoal(r, c)) return;   // 출발·도착 칸은 막지 않음
+  wall[r][c] = on; el.classList.toggle('wall', on);
+}
+gridEl.addEventListener('pointerdown', e => {
+  const el = e.target.closest('.cell'); if (!el || running) return;
+  clearTrails();                                // 지도를 고치면 이전 탐색 흔적 지우기
+  painting = true; paintTo = !wall[+el.dataset.r][+el.dataset.c];
+  setWall(el, paintTo);
+});
+gridEl.addEventListener('pointermove', e => {
+  if (!painting) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY)?.closest('.cell');
+  if (el) setWall(el, paintTo);
+});
+window.addEventListener('pointerup', () => painting = false);
+
+/* =====================================================================
+ * 2. 우선순위 큐 (최소 이진 힙)
+ *    - 보고서 코드 3-1, 3-2의 "Open ← MinHeap()"에 해당
+ *    - insert / extractMin 모두 O(log n) → 4.1 복잡도 표의 log V
+ * ===================================================================== */
+class MinHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+
+  // 두 항목 비교: 우선순위 배열 [키1, 키2, ...]을 앞에서부터 비교
+  less(x, y) {
+    for (let i = 0; i < x.pri.length; i++) {
+      if (x.pri[i] !== y.pri[i]) return x.pri[i] < y.pri[i];
+    }
+    return false;
+  }
+
+  // Open.insert(키, 정점): 맨 뒤에 넣고 부모보다 작으면 위로 올림
+  insert(pri, node) {
+    const a = this.a; a.push({ pri, node });
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (!this.less(a[i], a[p])) break;
+      [a[i], a[p]] = [a[p], a[i]]; i = p;
+    }
+  }
+
+  // Open.extractMin(): 키가 가장 작은 항목을 꺼내고, 맨 뒤 항목을 루트로 올려 아래로 내림
+  extractMin() {
+    const a = this.a, top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last; let i = 0;
+      while (true) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break;
+        [a[i], a[m]] = [a[m], a[i]]; i = m;
+      }
+    }
+    return top;
+  }
+}
+
+/* =====================================================================
+ * 3. 탐색 알고리즘 (Dijkstra와 A*를 한 함수로)
+ *    useH = false → Dijkstra (보고서 코드 3-1)
+ *    useH = true  → A*       (보고서 코드 3-2)
+ *    두 코드가 다른 줄은 [★ 다른 줄] 주석으로 표시
+ *
+ *    애니메이션을 위해 알고리즘은 먼저 끝까지 실행하고,
+ *    각 단계에서 일어난 일을 events 배열에 기록해 두었다가 천천히 재생한다.
+ * ===================================================================== */
+
+// 휴리스틱 h(n): 맨해튼 거리 |Δr| + |Δc|
+// 상하좌우 4방향·칸 비용 1인 격자에서는 실제 거리를 넘지 않고(Admissible)
+// 이웃 칸으로 가면 h가 최대 1만 줄어들어(Consistent) 최적 경로가 보장된다. (보고서 3.2)
+function h(r, c) {
+  return Math.abs(r - GOAL.r) + Math.abs(c - GOAL.c);
+}
+
+function search(useH) {
+  const INF = Infinity;
+  const g = new Array(N * N).fill(INF);        // 코드 3-1 줄 3: g[v] ← ∞
+  const parent = new Array(N * N).fill(-1);    // 코드 3-1 줄 4: parent[v] ← NIL
+  const closed = new Array(N * N).fill(false); // 코드 3-1 줄 8: Closed ← ∅
+  const open = new MinHeap();                  // 코드 3-1 줄 6: Open ← MinHeap()
+  const events = [];                           // 애니메이션 기록
+  let seq = 0;                                 // 같은 키일 때 먼저 들어온 순서
+
+  // 큐에 넣을 우선순위 계산  [★ 다른 줄: 코드 3-1/3-2 줄 7, 21]
+  //  - Dijkstra: [g, 순서]
+  //  - A*:       [f = g + h, -g, 순서]
+  //    f가 같으면 g가 큰 칸(목적지 쪽으로 더 나아간 칸)을 먼저 꺼낸다.
+  //    보고서 5.5 표의 "A* (동점: g 큰 쪽 먼저)"와 같은 규칙이다.
+  const priority = (r, c) => useH
+    ? [g[key(r, c)] + h(r, c), -g[key(r, c)], seq++]
+    : [g[key(r, c)], seq++];
+
+  const s = key(START.r, START.c), t = key(GOAL.r, GOAL.c);
+  g[s] = 0;                                    // 코드 3-1 줄 5: g[s] ← 0
+  open.insert(priority(START.r, START.c), s);  // 코드 3-1 줄 7: Open.insert(키, s)  [★ 다른 줄]
+  let expanded = 0;
+
+  while (open.size) {                          // 코드 3-1 줄 10: while Open is not empty
+    const { node: u } = open.extractMin();     // 코드 3-1 줄 11: u ← Open.extractMin()  [★ 키가 g냐 g+h냐]
+    if (closed[u]) continue;                   // 코드 3-1 줄 12: 이미 확정된 낡은 항목은 버림 (지연 삭제)
+    closed[u] = true; expanded++;              // 코드 3-1 줄 13: Closed.add(u) → u의 최단 거리 확정
+    const ur = Math.floor(u / N), uc = u % N;
+    events.push({ type: 'close', r: ur, c: uc, g: g[u], h: useH ? h(ur, uc) : null });
+
+    if (u === t) break;                        // 코드 3-1 줄 14~15: 목적지를 꺼내면 즉시 종료
+
+    // 코드 3-1 줄 16: for each (v, w) in Adj[u]  → 상하좌우 이웃, 비용 w = 1
+    for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const vr = ur + dr, vc = uc + dc;
+      if (vr < 0 || vr >= N || vc < 0 || vc >= N || wall[vr][vc]) continue;
+      const v = key(vr, vc);
+      if (closed[v]) continue;                 // 코드 3-1 줄 17: if v ∈ Closed: continue
+      if (g[u] + 1 < g[v]) {                   // 코드 3-1 줄 18: Relaxation — 더 짧은 길을 찾았을 때만
+        g[v] = g[u] + 1;                       // 코드 3-1 줄 19: g[v] ← g[u] + w
+        parent[v] = u;                         // 코드 3-1 줄 20: parent[v] ← u
+        open.insert(priority(vr, vc), v);      // 코드 3-1 줄 21: Open.insert(키, v)  [★ 다른 줄]
+        events.push({ type: 'open', r: vr, c: vc });
+      }
+    }
+  }
+
+  // 코드 3-3: parent를 목적지에서 거꾸로 따라가 경로 복원
+  const path = [];
+  if (closed[t]) {
+    for (let v = t; v !== -1; v = parent[v]) path.unshift(v);
+  }
+  return { events, path, expanded, cost: closed[t] ? g[t] : null };
+}
+
+/* =====================================================================
+ * 4. 애니메이션
+ * ===================================================================== */
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+const nowEl = document.getElementById('now');
+
+function clearTrails() {
+  for (const row of cells) for (const el of row)
+    el.classList.remove('open-d', 'closed-d', 'open-a', 'closed-a', 'path', 'current');
+  routeEl.setAttribute('points', '');
+  startEl.style.transition = 'none'; placeMarker(startEl, START.r, START.c);
+  void startEl.offsetWidth; startEl.style.transition = '';
+  nowEl.innerHTML = '<span class="k">대기 중</span>';
+}
+
+function setButtons(disabled) {
+  ['btnDij', 'btnAst'].forEach(id => document.getElementById(id).disabled = disabled);
+}
+
+async function run(useH) {
+  if (running) return;
+  running = true; setButtons(true); clearTrails();
+  const my = ++runId;
+  const tag = useH ? 'a' : 'd';
+  const name = useH ? 'A*' : 'Dijkstra';
+  const { events, path, expanded, cost } = search(useH);
+
+  // (1) 탐색 재생: 후보(Open)는 얇은 테두리, 확정(Closed)은 레이더파처럼 켜졌다가 은은하게 남음
+  let prev = null, count = 0;
+  for (const ev of events) {
+    if (my !== runId) return;                  // 초기화되면 중단
+    const el = cells[ev.r][ev.c];
+    if (ev.type === 'open') {
+      if (!el.classList.contains('closed-' + tag)) el.classList.add('open-' + tag);
+      continue;
+    }
+    prev?.classList.remove('current');
+    el.classList.remove('open-' + tag); el.classList.add('closed-' + tag, 'current');
+    prev = el; count++;
+    nowEl.innerHTML = `<b>${name}</b> · ${count}번째 확정<br><span class="k">칸</span> (${ev.r}, ${ev.c}) · <span class="k">g</span> ${ev.g}` +
+      (useH ? ` · <span class="k">h</span> ${ev.h} · <b>f ${ev.g + ev.h}</b>` : '');
+    await sleep(STEP_DELAY);
+  }
+  prev?.classList.remove('current');
+
+  result[useH ? 'ast' : 'dij'] = { expanded, cost };
+  updateScore();
+
+  if (!path.length) {
+    nowEl.innerHTML = `<b>${name}</b>: 길이 막혀 목적지에 갈 수 없습니다`;
+    running = false; setButtons(false); return;
+  }
+
+  // (2) 최단 경로를 형광 그린 선으로 연결 (선이 그려지는 애니메이션)
+  const pts = path.map(v => `${v % N + 0.5},${Math.floor(v / N) + 0.5}`).join(' ');
+  routeEl.setAttribute('points', pts);
+  const len = routeEl.getTotalLength();
+  routeEl.style.transition = 'none';
+  routeEl.style.strokeDasharray = len; routeEl.style.strokeDashoffset = len;
+  void routeEl.getBoundingClientRect(); routeEl.style.transition = '';
+  routeEl.style.strokeDashoffset = 0;
+  path.forEach(v => cells[Math.floor(v / N)][v % N].classList.add('path'));
+  await sleep(650);
+
+  // (3) 출발지 마커가 경로를 따라 부드럽게 주행 (CSS transition: left/top)
+  nowEl.innerHTML = `<b>${name}</b>: 경로 안내를 시작합니다 · 총 ${cost}칸`;
+  for (let i = 1; i < path.length; i++) {
+    if (my !== runId) return;
+    placeMarker(startEl, Math.floor(path[i] / N), path[i] % N);
+    await sleep(MOVE_DELAY);
+  }
+  nowEl.innerHTML = `<b>${name}</b>: 목적지에 도착했습니다<br><span class="k">확장</span> ${expanded}칸 · <span class="k">이동</span> ${cost}칸`;
+  running = false; setButtons(false);
+}
+
+function updateScore() {
+  const d = result.dij, a = result.ast, $ = id => document.getElementById(id);
+  $('dExp').textContent = d ? d.expanded : '–'; $('dLen').textContent = d ? (d.cost ?? '없음') : '–';
+  $('aExp').textContent = a ? a.expanded : '–'; $('aLen').textContent = a ? (a.cost ?? '없음') : '–';
+  const v = $('verdict');
+  if (d && a && d.cost !== null && a.cost !== null) {
+    const pct = (a.expanded / d.expanded * 100).toFixed(1);
+    v.innerHTML = `경로 길이는 둘 다 ${d.cost}칸으로 같고,<br>A*는 Dijkstra의 <b>${pct}%</b>만 확장했습니다.`;
+  } else if (d || a) {
+    v.textContent = '이제 다른 알고리즘도 같은 지도에서 실행해 보세요.';
+  }
+}
+
+document.getElementById('btnDij').onclick = () => run(false);
+document.getElementById('btnAst').onclick = () => run(true);
+document.getElementById('btnRst').onclick = () => {
+  runId++; running = false; setButtons(false);
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) { wall[r][c] = false; cells[r][c].classList.remove('wall'); }
+  result.dij = result.ast = null; updateScore();
+  document.getElementById('verdict').textContent = '같은 지도에서 두 버튼을 차례로 눌러 비교해 보세요.';
+  clearTrails();
+};
+</script>
+</body>
+</html>
